@@ -4,6 +4,7 @@ import { Send, Bot, User, Clock, Mic, MicOff, Volume2, VolumeX, Square } from "l
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import WebcamView from "@/components/WebcamView";
+import AIAvatar from "@/components/AIAvatar";
 
 // Web Speech API types
 interface SpeechRecognitionEvent {
@@ -48,6 +49,12 @@ const InterviewChat = ({ role, difficulty, jobDescription, resumeText, onFinish 
     totalTicks: 0,
     expressions: {} as Record<string, number>,
   });
+  const [isSpeakingTTS, setIsSpeakingTTS] = useState(false);
+  const [facePosition, setFacePosition] = useState<{ x: number; y: number } | null>(null);
+
+  const handleFacePosition = useCallback((pos: { x: number; y: number } | null) => {
+    setFacePosition(pos);
+  }, []);
 
   const handleVisualUpdate = useCallback((metrics: any) => {
     if (metrics.faceDetected) {
@@ -69,7 +76,12 @@ const InterviewChat = ({ role, difficulty, jobDescription, resumeText, onFinish 
     utterance.rate = 0.95;
     utterance.pitch = 1;
     utterance.lang = "en-US";
-    utterance.onend = () => onEnd?.();
+    utterance.onstart = () => setIsSpeakingTTS(true);
+    utterance.onend = () => {
+      setIsSpeakingTTS(false);
+      onEnd?.();
+    };
+    utterance.onerror = () => setIsSpeakingTTS(false);
     window.speechSynthesis.speak(utterance);
   }, [ttsEnabled]);
 
@@ -86,6 +98,7 @@ const InterviewChat = ({ role, difficulty, jobDescription, resumeText, onFinish 
 
   useEffect(() => () => {
     window.speechSynthesis?.cancel();
+    setIsSpeakingTTS(false);
     if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
   }, []);
 
@@ -280,14 +293,27 @@ const InterviewChat = ({ role, difficulty, jobDescription, resumeText, onFinish 
       </div>
 
       {/* Main content with camera */}
-      <div className="flex-1 flex overflow-hidden min-h-0">
-        {/* Camera sidebar */}
-        <div className="hidden md:flex flex-col w-96 p-6 border-r border-border/50 gap-4 shrink-0">
-          <WebcamView onVisualUpdate={handleVisualUpdate} />
-          <div className="glass rounded-xl p-4 text-center">
-            <p className="text-xs text-muted-foreground mb-1">Interview Mode</p>
-            <p className="text-sm font-semibold text-foreground capitalize">{role === "others" ? "Custom Role" : role}</p>
-            <p className="text-xs text-primary capitalize">{difficulty} level</p>
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
+        {/* Sidebar with Avatar and Camera */}
+        <div className="flex flex-col w-full md:w-96 p-4 md:p-6 border-b md:border-b-0 md:border-r border-border/50 gap-4 shrink-0 overflow-y-auto">
+          {/* AI Avatar */}
+          <div className="flex flex-col gap-2">
+            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest ml-1">Interviewer</p>
+            <AIAvatar isSpeaking={isSpeakingTTS} facePos={facePosition} />
+          </div>
+
+          <div className="h-px bg-border/30 my-2" />
+
+          {/* Candidate Camera */}
+          <div className="flex flex-col gap-2">
+            <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest ml-1">You (Candidate)</p>
+            <WebcamView onVisualUpdate={handleVisualUpdate} onFacePosition={handleFacePosition} />
+          </div>
+
+          <div className="glass rounded-xl p-4 text-center hidden md:block mt-auto">
+            <p className="text-xs text-muted-foreground mb-1">Session Status</p>
+            <p className="text-sm font-semibold text-foreground capitalize">Interview in Progress</p>
+            <p className="text-xs text-primary capitalize">{difficulty} difficulty</p>
           </div>
         </div>
 

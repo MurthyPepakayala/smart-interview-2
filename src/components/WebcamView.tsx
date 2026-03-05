@@ -13,9 +13,10 @@ interface VisualMetrics {
 interface WebcamViewProps {
   onPersonCountWarning?: (warning: boolean) => void;
   onVisualUpdate?: (metrics: VisualMetrics) => void;
+  onFacePosition?: (pos: { x: number; y: number } | null) => void;
 }
 
-const WebcamView = ({ onPersonCountWarning, onVisualUpdate }: WebcamViewProps) => {
+const WebcamView = ({ onPersonCountWarning, onVisualUpdate, onFacePosition }: WebcamViewProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -137,6 +138,12 @@ const WebcamView = ({ onPersonCountWarning, onVisualUpdate }: WebcamViewProps) =
       setCurrentMetrics(metrics);
       onVisualUpdate?.(metrics);
 
+      // 4. Calculate face center for gaze tracking
+      const box = mainFace.detection.box;
+      const faceCenterX = (box.x + box.width / 2) / video.videoWidth;
+      const faceCenterY = (box.y + box.height / 2) / video.videoHeight;
+      onFacePosition?.({ x: faceCenterX, y: faceCenterY });
+
       // 3. Warning priority logic
       let newWarning = "";
       if (detections.length > 1) {
@@ -151,8 +158,9 @@ const WebcamView = ({ onPersonCountWarning, onVisualUpdate }: WebcamViewProps) =
       }
     } catch (err) {
       console.error("Detection error:", err);
+      onFacePosition?.(null);
     }
-  }, [modelsLoaded, warning, onPersonCountWarning, onVisualUpdate]);
+  }, [modelsLoaded, warning, onPersonCountWarning, onVisualUpdate, onFacePosition]);
 
   useEffect(() => {
     if (enabled && modelsLoaded) {

@@ -32,6 +32,7 @@ const Index = () => {
   const [role, setRole] = useState("");
   const [difficulty, setDifficulty] = useState("");
   const [jobDescription, setJobDescription] = useState<string | undefined>();
+  const [resumeText, setResumeText] = useState<string | undefined>();
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const { user, loading } = useAuth();
   const navigate = useNavigate();
@@ -42,10 +43,11 @@ const Index = () => {
     }
   }, [user, loading, navigate]);
 
-  const handleBegin = (r: string, d: string, jd?: string) => {
+  const handleBegin = (r: string, d: string, jd?: string, rt?: string) => {
     setRole(r);
     setDifficulty(d);
     setJobDescription(jd);
+    setResumeText(rt);
     setScreen("interview");
   };
 
@@ -95,6 +97,7 @@ const Index = () => {
     setRole("");
     setDifficulty("");
     setJobDescription(undefined);
+    setResumeText(undefined);
     setChatMessages([]);
   };
 
@@ -105,12 +108,13 @@ const Index = () => {
     <main className="min-h-screen bg-background">
       {screen === "hero" && <HeroSection onStart={() => setScreen("setup")} />}
       {screen === "setup" && <InterviewSetup onBegin={handleBegin} onBack={() => setScreen("hero")} />}
-      {screen === "interview" && <InterviewChat role={role} difficulty={difficulty} jobDescription={jobDescription} onFinish={handleFinish} />}
+      {screen === "interview" && <InterviewChat role={role} difficulty={difficulty} jobDescription={jobDescription} resumeText={resumeText} onFinish={handleFinish} />}
       {screen === "feedback" && (
         <FeedbackDashboard
           role={role}
           difficulty={difficulty}
           messages={chatMessages}
+          resumeText={resumeText}
           onRestart={handleRestart}
           onSaveSession={saveSession}
         />

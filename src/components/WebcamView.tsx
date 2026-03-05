@@ -1,19 +1,52 @@
 import { useRef, useEffect, useState, useCallback } from "react";
-import { Video, VideoOff, AlertTriangle } from "lucide-react";
+import { Video, VideoOff, AlertTriangle, Eye, Smile } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import * as faceapi from "face-api.js";
+
+interface VisualMetrics {
+  eyeContact: boolean;
+  dominantExpression: string;
+  faceDetected: boolean;
+}
 
 interface WebcamViewProps {
   onPersonCountWarning?: (warning: boolean) => void;
+  onVisualUpdate?: (metrics: VisualMetrics) => void;
 }
 
-const WebcamView = ({ onPersonCountWarning }: WebcamViewProps) => {
+const WebcamView = ({ onPersonCountWarning, onVisualUpdate }: WebcamViewProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<number | null>(null);
   const [enabled, setEnabled] = useState(true);
   const [warning, setWarning] = useState("");
+  const [modelsLoaded, setModelsLoaded] = useState(false);
+  const [currentMetrics, setCurrentMetrics] = useState<VisualMetrics>({
+    eyeContact: false,
+    dominantExpression: "neutral",
+    faceDetected: false,
+  });
+
+  useEffect(() => {
+    const loadModels = async () => {
+      try {
+        const MODEL_URL = "/weights";
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+          faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+          faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL),
+        ]);
+        setModelsLoaded(true);
+        console.log("Face-api models loaded");
+      } catch (err) {
+        console.error("Failed to load face-api models:", err);
+        toast.error("Failed to load face-tracking models");
+      }
+    };
+    loadModels();
+  }, []);
 
   useEffect(() => {
     startCamera();
@@ -23,100 +56,116 @@ const WebcamView = ({ onPersonCountWarning }: WebcamViewProps) => {
     };
   }, []);
 
-  // Simple face detection using canvas pixel analysis
-  // We use a lightweight skin-color detection heuristic
-  const detectPersons = useCallback(() => {
+  const detectVisuals = useCallback(async () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas || video.readyState < 2) return;
+    if (!video || !canvas || !modelsLoaded || video.readyState < 2) return;
 
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return;
+    try {
+      const displaySize = { width: video.videoWidth, height: video.videoHeight };
+      faceapi.matchDimensions(canvas, displaySize);
 
-    canvas.width = 160;
-    canvas.height = 120;
-    ctx.drawImage(video, 0, 0, 160, 120);
+      const detections = await faceapi
+        .detectAllFaces(video, new faceapi.TinyFaceDetectorOptions())
+        .withFaceLandmarks()
+        .withFaceExpressions();
 
-    const imageData = ctx.getImageData(0, 0, 160, 120);
-    const data = imageData.data;
+      const ctx = canvas.getContext("2d");
+      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Detect skin-colored regions using HSV-like heuristic
-    let skinPixels = 0;
-    const regionMap = new Uint8Array(160 * 120);
-
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      // Skin color detection heuristic
-      if (r > 95 && g > 40 && b > 20 &&
-          r > g && r > b &&
-          (r - g) > 15 &&
-          Math.abs(r - g) > 15 &&
-          r - b > 15) {
-        skinPixels++;
-        regionMap[i / 4] = 1;
+      if (!detections || detections.length === 0) {
+        if (warning !== "No person detected! Please stay in frame.") {
+          setWarning("No person detected! Please stay in frame.");
+          onPersonCountWarning?.(true);
+        }
+        const metrics = { eyeContact: false, dominantExpression: "none", faceDetected: false };
+        setCurrentMetrics(metrics);
+        onVisualUpdate?.(metrics);
+        return;
       }
-    }
 
-    const totalPixels = 160 * 120;
-    const skinRatio = skinPixels / totalPixels;
-
-    // Count distinct blobs using simple connected component analysis
-    const visited = new Uint8Array(160 * 120);
-    let blobCount = 0;
-    const minBlobSize = 80; // minimum pixels for a "person"
-
-    for (let y = 0; y < 120; y++) {
-      for (let x = 0; x < 160; x++) {
-        const idx = y * 160 + x;
-        if (regionMap[idx] && !visited[idx]) {
-          // BFS flood fill
-          const queue = [idx];
-          visited[idx] = 1;
-          let size = 0;
-          while (queue.length > 0) {
-            const cur = queue.pop()!;
-            size++;
-            const cx = cur % 160, cy = Math.floor(cur / 160);
-            for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
-              const nx = cx + dx, ny = cy + dy;
-              if (nx >= 0 && nx < 160 && ny >= 0 && ny < 120) {
-                const ni = ny * 160 + nx;
-                if (regionMap[ni] && !visited[ni]) {
-                  visited[ni] = 1;
-                  queue.push(ni);
-                }
-              }
-            }
-          }
-          if (size >= minBlobSize) blobCount++;
+      // 1. Multi-person check
+      if (detections.length > 1) {
+        if (warning !== "Multiple persons detected! Please stay alone.") {
+          setWarning("Multiple persons detected! Please stay alone.");
+          onPersonCountWarning?.(true);
         }
       }
-    }
 
-    let newWarning = "";
-    if (skinRatio < 0.02 || blobCount === 0) {
-      newWarning = "No person detected! Please stay in frame.";
-    } else if (blobCount > 1) {
-      newWarning = "Multiple persons detected! Only one person allowed.";
-    }
+      // 2. Process primary face (first detection) for metrics
+      const mainFace = detections[0];
+      const resizedDetections = faceapi.resizeResults(mainFace, displaySize);
+      
+      // Draw minimal face mesh for all detected faces (to show we see them)
+      if (ctx) {
+        const resizedAll = faceapi.resizeResults(detections, displaySize);
+        ctx.strokeStyle = "rgba(0, 255, 0, 0.3)";
+        ctx.lineWidth = 1;
+        faceapi.draw.drawFaceLandmarks(canvas, resizedAll);
+      }
 
-    if (newWarning !== warning) {
-      setWarning(newWarning);
-      onPersonCountWarning?.(!!newWarning);
-      if (newWarning) toast.warning(newWarning);
+      const landmarks = mainFace.landmarks;
+      const nose = landmarks.getNose();
+      const leftEye = landmarks.getLeftEye();
+      const rightEye = landmarks.getRightEye();
+      
+      const eyeCenter = (leftEye[0].x + rightEye[3].x) / 2;
+      const nosePos = nose[0].x;
+      const eyeContact = Math.abs(eyeCenter - nosePos) < 15;
+
+      // Draw specific eye highlights for the main face
+      if (ctx) {
+        const eyeLandmarks = [...resizedDetections.landmarks.getLeftEye(), ...resizedDetections.landmarks.getRightEye()];
+        ctx.fillStyle = eyeContact ? "rgba(34, 197, 94, 0.6)" : "rgba(239, 68, 68, 0.6)";
+        eyeLandmarks.forEach(p => {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 2, 0, 2 * Math.PI);
+          ctx.fill();
+        });
+      }
+
+      const expressions = mainFace.expressions;
+      const dominantExpression = (Object.entries(expressions) as [string, number][])
+        .reduce((a, b) => (a[1] > b[1] ? a : b))[0];
+
+      const metrics = {
+        eyeContact,
+        dominantExpression,
+        faceDetected: true,
+      };
+
+      setCurrentMetrics(metrics);
+      onVisualUpdate?.(metrics);
+
+      // 3. Warning priority logic
+      let newWarning = "";
+      if (detections.length > 1) {
+        newWarning = "Multiple persons detected! Please stay alone.";
+      } else if (!eyeContact) {
+        newWarning = "Look directly at the camera!";
+      }
+
+      if (newWarning !== warning) {
+        setWarning(newWarning);
+        onPersonCountWarning?.(!!newWarning);
+      }
+    } catch (err) {
+      console.error("Detection error:", err);
     }
-  }, [warning, onPersonCountWarning]);
+  }, [modelsLoaded, warning, onPersonCountWarning, onVisualUpdate]);
 
   useEffect(() => {
-    if (enabled) {
-      intervalRef.current = window.setInterval(detectPersons, 3000);
+    if (enabled && modelsLoaded) {
+      intervalRef.current = window.setInterval(detectVisuals, 100); // Faster updates for visual markers
     } else {
       if (intervalRef.current) clearInterval(intervalRef.current);
       setWarning("");
       onPersonCountWarning?.(false);
     }
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [enabled, detectPersons]);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [enabled, modelsLoaded, detectVisuals]);
 
   const startCamera = async () => {
     try {
@@ -145,21 +194,50 @@ const WebcamView = ({ onPersonCountWarning }: WebcamViewProps) => {
   };
 
   return (
-    <div className="relative rounded-xl overflow-hidden border border-border/50 bg-card aspect-video">
+    <div className="relative rounded-xl overflow-hidden border border-border/50 bg-card aspect-video group">
       {enabled ? (
-        <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover" style={{ transform: "scaleX(-1)" }} />
+        <div className="relative w-full h-full shadow-inner">
+          <video
+            ref={videoRef}
+            autoPlay
+            muted
+            playsInline
+            className="w-full h-full object-cover"
+            style={{ transform: "scaleX(-1)" }}
+          />
+          <canvas
+            ref={canvasRef}
+            className="absolute top-0 left-0 w-full h-full pointer-events-none"
+            style={{ transform: "scaleX(-1)" }}
+          />
+        </div>
       ) : (
         <div className="w-full h-full flex items-center justify-center">
           <VideoOff className="h-8 w-8 text-muted-foreground" />
         </div>
       )}
-      <canvas ref={canvasRef} className="hidden" />
+
+      {/* Visual Metrics Indicators (Floating) */}
+      {enabled && modelsLoaded && currentMetrics.faceDetected && (
+        <div className="absolute bottom-12 left-2 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className={`px-2 py-1 rounded-md text-[10px] font-medium flex items-center gap-1.5 backdrop-blur-md ${currentMetrics.eyeContact ? 'bg-success/60 text-success-foreground' : 'bg-destructive/60 text-destructive-foreground'}`}>
+            <Eye className="h-3 w-3" />
+            {currentMetrics.eyeContact ? "Good Eye Contact" : "Look at Camera"}
+          </div>
+          <div className="px-2 py-1 rounded-md bg-primary/60 backdrop-blur-md text-primary-foreground text-[10px] font-medium flex items-center gap-1.5">
+            <Smile className="h-3 w-3" />
+            {currentMetrics.dominantExpression}
+          </div>
+        </div>
+      )}
+
       {warning && (
-        <div className="absolute top-2 left-2 right-2 bg-destructive/90 text-destructive-foreground text-xs font-medium px-3 py-1.5 rounded-lg flex items-center gap-1.5 animate-pulse">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+        <div className="absolute top-2 left-2 right-2 bg-destructive/90 text-destructive-foreground text-xs font-medium px-3 py-1.5 rounded-lg flex items-center gap-1.5 animate-pulse shadow-lg z-10">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
           {warning}
         </div>
       )}
+      
       <Button
         variant="ghost"
         size="icon"

@@ -29,11 +29,12 @@ interface FeedbackDashboardProps {
   role: string;
   difficulty: string;
   messages: ChatMessage[];
+  resumeText?: string;
   onRestart: () => void;
   onSaveSession?: (feedback: AIFeedback) => Promise<void>;
 }
 
-const FeedbackDashboard = ({ role, difficulty, messages, onRestart, onSaveSession }: FeedbackDashboardProps) => {
+const FeedbackDashboard = ({ role, difficulty, messages, resumeText, onRestart, onSaveSession }: FeedbackDashboardProps) => {
   const [feedback, setFeedback] = useState<AIFeedback | null>(null);
   const [loading, setLoading] = useState(true);
   const [saved, setSaved] = useState(false);
@@ -45,13 +46,14 @@ const FeedbackDashboard = ({ role, difficulty, messages, onRestart, onSaveSessio
   useEffect(() => {
     const fetchFeedback = async () => {
       try {
+        const visualMetrics = (messages[0] as any)?.visualMetrics;
         const resp = await fetch(FEEDBACK_URL, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
           },
-          body: JSON.stringify({ messages, role, difficulty }),
+          body: JSON.stringify({ messages, role, difficulty, visualMetrics, resumeText }),
         });
 
         if (!resp.ok) {

@@ -12,7 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const { messages, role, difficulty } = await req.json();
+    const { messages, role, difficulty, visualMetrics, resumeText } = await req.json();
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
@@ -20,7 +20,24 @@ serve(async (req) => {
       .map((m: { role: string; text: string }) => `${m.role === "ai" ? "Interviewer" : "Candidate"}: ${m.text}`)
       .join("\n\n");
 
+    const visualText = visualMetrics ? `
+Visual Engagement Metrics:
+- Eye Contact Ratio: ${visualMetrics.eyeContactRatio}%
+- Dominant Expressions observed: ${visualMetrics.dominantExpressions.join(", ")}
+
+When calculating the "confidenceScore", factor in these visual metrics. High eye contact (>70%) and professional expressions generally indicate higher confidence.
+` : "";
+
+    const resumeInstruction = resumeText ? `
+Candidate Resume Context:
+${resumeText}
+
+Use this resume to identify specific strengths or gaps in their experience based on their interview performance. Tailor the "summary", "strengths", and "improvements" to their specific career history.
+` : "";
+
     const systemPrompt = `You are an expert HR interview coach. Analyze the following interview conversation for a ${difficulty}-level ${role} position and provide structured feedback.
+${visualText}
+${resumeInstruction}
 
 You MUST respond with valid JSON only, no markdown, no code fences. Use this exact structure:
 {
@@ -35,12 +52,12 @@ You MUST respond with valid JSON only, no markdown, no code fences. Use this exa
 }
 
 Score guidelines:
-- 85-100: Exceptional answers with specific examples, strong communication
+- 85-100: Exceptional answers (and/or excellent visual engagement), specific examples, strong communication
 - 70-84: Good answers, some areas could be more detailed
 - 55-69: Adequate but lacking depth or specifics
 - Below 55: Needs significant improvement
 
-Be honest but encouraging. Base scores on actual answer quality, not just length.`;
+Be honest but encouraging. Base scores on answer quality AND visual confidence metrics if provided.`;
 
     const response = await fetch(
       "https://ai.gateway.lovable.dev/v1/chat/completions",

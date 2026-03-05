@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Bot, User, Clock, Mic, MicOff, Volume2, VolumeX } from "lucide-react";
+import { Send, Bot, User, Clock, Mic, MicOff, Volume2, VolumeX, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import WebcamView from "@/components/WebcamView";
@@ -25,12 +25,13 @@ interface InterviewChatProps {
   role: string;
   difficulty: string;
   jobDescription?: string;
+  resumeText?: string;
   onFinish: (messages: Message[]) => void;
 }
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/interview-chat`;
 
-const InterviewChat = ({ role, difficulty, jobDescription, onFinish }: InterviewChatProps) => {
+const InterviewChat = ({ role, difficulty, jobDescription, resumeText, onFinish }: InterviewChatProps) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -42,6 +43,20 @@ const InterviewChat = ({ role, difficulty, jobDescription, onFinish }: Interview
   const recognitionRef = useRef<any>(null);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastSpokenRef = useRef("");
+  const visualMetricsRef = useRef({
+    eyeContactTicks: 0,
+    totalTicks: 0,
+    expressions: {} as Record<string, number>,
+  });
+
+  const handleVisualUpdate = useCallback((metrics: any) => {
+    if (metrics.faceDetected) {
+      visualMetricsRef.current.totalTicks++;
+      if (metrics.eyeContact) visualMetricsRef.current.eyeContactTicks++;
+      const expr = metrics.dominantExpression;
+      visualMetricsRef.current.expressions[expr] = (visualMetricsRef.current.expressions[expr] || 0) + 1;
+    }
+  }, []);
 
   // TTS
   const speak = useCallback((text: string, onEnd?: () => void) => {
@@ -152,9 +167,14 @@ const InterviewChat = ({ role, difficulty, jobDescription, onFinish }: Interview
   useEffect(() => {
     if (hasSentInitial.current) return;
     hasSentInitial.current = true;
-    const initialContent = role === "others" && jobDescription
+    let initialContent = role === "others" && jobDescription
       ? `Start the interview based on this job description at ${difficulty} level. Here is the job description:\n\n${jobDescription}\n\nPlease introduce yourself and ask your first question.`
       : `Start the interview. I'm applying for the ${role} position at ${difficulty} level. Please introduce yourself and ask your first question.`;
+    
+    if (resumeText) {
+      initialContent += `\n\nHere is my resume/experience for context to help you tailor your questions:\n${resumeText}`;
+    }
+
     streamAI([{ role: "user", content: initialContent }], true);
   }, []);
 
@@ -206,6 +226,30 @@ const InterviewChat = ({ role, difficulty, jobDescription, onFinish }: Interview
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
+  const handleFinishInterview = () => {
+    const userMessages = messages.filter(m => m.role === "user");
+    if (userMessages.length === 0) {
+      toast.error("Please answer at least one question before ending the interview.");
+      return;
+    }
+
+    const total = visualMetricsRef.current.totalTicks;
+    const eyeRatio = total > 0 ? (visualMetricsRef.current.eyeContactTicks / total) * 100 : 0;
+    
+    // Sort expressions by frequency
+    const dominantExprs = Object.entries(visualMetricsRef.current.expressions)
+      .sort((a, b) => b[1] - a[1])
+      .map(([name]) => name)
+      .slice(0, 2);
+
+    const metrics = {
+      eyeContactRatio: Math.round(eyeRatio),
+      dominantExpressions: dominantExprs,
+    };
+
+    onFinish(messages.map(m => ({ ...m, visualMetrics: metrics })));
+  };
+
   return (
     <section className="h-screen flex flex-col overflow-hidden">
       {/* Header */}
@@ -238,8 +282,8 @@ const InterviewChat = ({ role, difficulty, jobDescription, onFinish }: Interview
       {/* Main content with camera */}
       <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Camera sidebar */}
-        <div className="hidden md:flex flex-col w-72 p-4 border-r border-border/50 gap-4 shrink-0">
-          <WebcamView />
+        <div className="hidden md:flex flex-col w-96 p-6 border-r border-border/50 gap-4 shrink-0">
+          <WebcamView onVisualUpdate={handleVisualUpdate} />
           <div className="glass rounded-xl p-4 text-center">
             <p className="text-xs text-muted-foreground mb-1">Interview Mode</p>
             <p className="text-sm font-semibold text-foreground capitalize">{role === "others" ? "Custom Role" : role}</p>
@@ -291,7 +335,7 @@ const InterviewChat = ({ role, difficulty, jobDescription, onFinish }: Interview
       <div className="border-t border-border/50 px-6 py-4 shrink-0">
         <div className="max-w-3xl mx-auto flex gap-3">
           {isComplete ? (
-            <Button onClick={() => onFinish(messages)} className="w-full py-6 text-lg glow">
+            <Button onClick={handleFinishInterview} className="w-full py-6 text-lg glow">
               End Interview & View Feedback
             </Button>
           ) : (
@@ -302,12 +346,24 @@ const InterviewChat = ({ role, difficulty, jobDescription, onFinish }: Interview
                 rows={1} disabled={isTyping}
                 className="flex-1 bg-secondary border border-border rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50"
               />
-              <Button onClick={toggleListening} disabled={isTyping} size="icon" variant={isListening ? "destructive" : "secondary"} className={`h-12 w-12 rounded-xl shrink-0 transition-all ${isListening ? "animate-pulse-glow" : ""}`}>
-                {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-              </Button>
-              <Button onClick={() => { stopListening(); handleSend(); }} disabled={!input.trim() || isTyping} size="icon" className="h-12 w-12 rounded-xl shrink-0">
-                <Send className="h-5 w-5" />
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={toggleListening} disabled={isTyping} size="icon" variant={isListening ? "destructive" : "secondary"} className={`h-12 w-12 rounded-xl shrink-0 transition-all ${isListening ? "animate-pulse-glow" : ""}`}>
+                  {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                </Button>
+                <Button onClick={() => handleSend()} disabled={!input.trim() || isTyping} size="icon" className="h-12 w-12 rounded-xl shrink-0">
+                  <Send className="h-5 w-5" />
+                </Button>
+                <Button 
+                  onClick={handleFinishInterview} 
+                  variant="outline" 
+                  size="icon" 
+                  title="Stop Interview & View Feedback"
+                  disabled={!messages.some(m => m.role === "user")}
+                  className="h-12 w-12 rounded-xl shrink-0 border-destructive/30 hover:bg-destructive/10 text-destructive hover:text-destructive transition-colors disabled:opacity-30"
+                >
+                  <Square className="h-5 w-5 fill-current" />
+                </Button>
+              </div>
             </>
           )}
         </div>

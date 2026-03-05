@@ -12,7 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const { messages, role, difficulty, jobDescription } = await req.json();
+    const { messages, role, difficulty, jobDescription, resumeText } = await req.json();
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
@@ -20,22 +20,16 @@ serve(async (req) => {
       ? `Based on the following job description, generate relevant interview questions:\n\n${jobDescription}`
       : `for a ${role} position`;
 
-    const systemPrompt = `You are a professional HR interviewer conducting a ${difficulty}-level job interview ${roleContext}.
+    const resumeContext = resumeText ? `\n\nCandidate's Resume/Experience:\n${resumeText}\n\nUse this resume to tailor your questions and verify specific claims if necessary.` : "";
 
-Your behavior:
-- Ask ONE question at a time
-- Start with an introduction and your first question
-- After the candidate answers, give brief feedback (1-2 sentences) then ask the next question
-- Ask a total of 5 questions covering: behavioral, technical, situational, and culture-fit aspects
-- Keep questions relevant to the role and ${difficulty} experience level
-- Be professional, encouraging, and realistic
-- After the 5th answer, provide a brief closing statement and say the interview is complete
-- When the interview is complete, end your message with [INTERVIEW_COMPLETE]
+    const systemPrompt = `You are an automated HR screening tool for a ${difficulty}-level ${roleContext}.${resumeContext}
 
-Difficulty guidelines:
-- beginner/fresher: Entry-level, focus on fundamentals, learning ability, and enthusiasm
-- intermediate/mid-level: 3-5 years experience, practical scenarios, problem-solving
-- advanced/senior: Leadership, architecture decisions, mentoring, complex trade-offs`;
+STRICT RULES:
+- OUTPUT ONLY THE QUESTION. 
+- NO greetings (No "Hello", "Hi"), NO introductions, NO preambles, NO transitions.
+- MAXIMUM 20 WORDS.
+- DO NOT provide feedback on previous answers.
+- After 5 questions, output ONLY "[INTERVIEW_COMPLETE]".`;
 
     const response = await fetch(
       "https://ai.gateway.lovable.dev/v1/chat/completions",
